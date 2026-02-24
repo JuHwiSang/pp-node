@@ -1259,31 +1259,10 @@ void MaybePrintPPGadget(LookupIterator* it) {
   if (it->IsElement()) return;  // Ignore index access.
   Isolate* isolate = it->isolate();
 
-  // DEBUG: log every DATA case entry
-  DirectHandle<Name> dbg_name = it->GetName();
-  if (IsString(*dbg_name)) {
-    Tagged<String> dbg_str = Cast<String>(*dbg_name);
-    if (dbg_str->IsEqualTo(base::CStrVector("polluted"))) {
-      PrintF(stderr, "[DEBUG] MaybePrintPPGadget called for 'polluted'\n");
-    }
-  }
-
   // Check if holder is Object.prototype.
   auto holder = it->GetHolder<JSReceiver>();
   Tagged<NativeContext> native_ctx = isolate->raw_native_context();
-  if (*holder != native_ctx->initial_object_prototype()) {
-    // DEBUG
-    if (IsString(*dbg_name)) {
-      Tagged<String> dbg_str = Cast<String>(*dbg_name);
-      if (dbg_str->IsEqualTo(base::CStrVector("polluted"))) {
-        PrintF(stderr, "[DEBUG] holder != initial_object_prototype, skipping\n");
-        PrintF(stderr, "[DEBUG] holder=%p proto=%p\n",
-               (void*)holder->ptr(),
-               (void*)native_ctx->initial_object_prototype().ptr());
-      }
-    }
-    return;
-  }
+  if (*holder != native_ctx->initial_object_prototype()) return;
 
   // Filter out built-in properties.
   DirectHandle<Name> name = it->GetName();

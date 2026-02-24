@@ -3017,6 +3017,19 @@ void AccessorAssembler::GenericPropertyLoad(
       Goto(slow);
 
       BIND(&return_value);
+      {
+        // pp-node: Check if the property was found on Object.prototype.
+        // If so, this is a potential prototype pollution gadget read.
+        TNode<NativeContext> native_context = LoadNativeContext(p->context());
+        TNode<Object> initial_object_proto = LoadContextElement(
+            native_context, Context::INITIAL_OBJECT_PROTOTYPE_INDEX);
+        Label not_pp_gadget(this);
+        GotoIfNot(TaggedEqual(proto, initial_object_proto), &not_pp_gadget);
+        // Call runtime to log the PP gadget detection.
+        CallRuntime(Runtime::kReportPPGadget, p->context(), name);
+        Goto(&not_pp_gadget);
+        BIND(&not_pp_gadget);
+      }
       Return(var_value.value());
     }
 

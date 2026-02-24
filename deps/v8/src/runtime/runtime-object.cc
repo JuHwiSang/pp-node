@@ -1721,5 +1721,50 @@ RUNTIME_FUNCTION(Runtime_SwissTableDetailsAt) {
   return d.AsSmi();
 }
 
+// pp-node: Runtime function called from CSA GenericPropertyLoad when a property
+// is read from Object.prototype during prototype chain traversal.
+// This detects potential prototype pollution gadgets.
+RUNTIME_FUNCTION(Runtime_ReportPPGadget) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  DirectHandle<Name> name = args.at<Name>(0);
+
+  // Filter out non-string names (symbols, etc.)
+  if (!IsString(*name)) return ReadOnlyRoots(isolate).undefined_value();
+
+  // Filter out built-in Object.prototype properties.
+  DirectHandle<String> name_str = Cast<String>(name);
+  // List of standard Object.prototype property names.
+  static const char* const kBuiltins[] = {
+      "constructor",
+      "hasOwnProperty",
+      "isPrototypeOf",
+      "propertyIsEnumerable",
+      "toLocaleString",
+      "toString",
+      "valueOf",
+      "__defineGetter__",
+      "__defineSetter__",
+      "__lookupGetter__",
+      "__lookupSetter__",
+      "__proto__",
+  };
+  for (const char* builtin : kBuiltins) {
+    if (name_str->IsEqualTo(base::CStrVector(builtin))) {
+      return ReadOnlyRoots(isolate).undefined_value();
+    }
+  }
+
+  // PP gadget detected! Log to stderr.
+  PrintF(stderr, "\n[PP-GADGET] Read from Object.prototype detected!\n");
+  PrintF(stderr, "  Property: ");
+  ShortPrint(*name, stderr);
+  PrintF(stderr, "\n");
+  isolate->PrintStack(stderr, Isolate::kPrintStackVerbose);
+  PrintF(stderr, "\n");
+
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
 }  // namespace internal
 }  // namespace v8

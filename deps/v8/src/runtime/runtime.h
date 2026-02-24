@@ -301,7 +301,8 @@ constexpr bool CanTriggerGC(T... properties) {
   F(Typeof, 1, 1, RuntimeCallProperty::kCannotTriggerGC)   \
   F(UnwindAndFindExceptionHandler, 0, 1)                   \
   I(AddLhsIsStringConstantInternalize, 4, 1)               \
-  I(AddRhsIsStringConstantInternalize, 4, 1)
+  I(AddRhsIsStringConstantInternalize, 4, 1)               \
+  F(ReportPPGadget, 1, 1)
 
 #define FOR_EACH_INTRINSIC_LITERALS(F, I) \
   F(CreateArrayLiteral, 4, 1)             \
