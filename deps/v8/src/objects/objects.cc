@@ -1239,10 +1239,10 @@ bool IsBuiltinObjectPrototypeProperty(Tagged<Name> name, Isolate* isolate) {
   if (name == roots.constructor_string()) return true;
   if (name == roots.toString_string()) return true;
   if (name == roots.valueOf_string()) return true;
-  if (name == roots.toLocaleString_string()) return true;
   // For properties without a root internalized string, compare content.
   if (!IsString(name)) return true;  // Symbols etc. — skip.
   Tagged<String> str = Cast<String>(name);
+  if (str->IsEqualTo(base::CStrVector("toLocaleString"))) return true;
   if (str->IsEqualTo(base::CStrVector("hasOwnProperty"))) return true;
   if (str->IsEqualTo(base::CStrVector("isPrototypeOf"))) return true;
   if (str->IsEqualTo(base::CStrVector("propertyIsEnumerable"))) return true;
