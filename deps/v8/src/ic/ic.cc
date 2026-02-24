@@ -383,6 +383,12 @@ void IC::ConfigureVectorState(DirectHandle<Name> name,
 MaybeDirectHandle<Object> LoadIC::Load(Handle<JSAny> object, Handle<Name> name,
                                        bool update_feedback,
                                        DirectHandle<JSAny> receiver) {
+  // DEBUG: check if LoadIC::Load is called for 'polluted'
+  if (IsString(*name) && Cast<String>(*name)->IsEqualTo(
+          base::CStrVector("polluted"))) {
+    PrintF(stderr, "[DEBUG] LoadIC::Load called for 'polluted'\n");
+  }
+
   bool use_ic = (state() != NO_FEEDBACK) && v8_flags.use_ic && update_feedback;
 
   if (receiver.is_null()) {
