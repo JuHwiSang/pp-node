@@ -57,11 +57,17 @@ gadgets:
 2. Run:
 
 ```bash
-./node your_app.js
+./node --no-use-ic --no-opt your_app.js
 ```
 
-No flags needed — detection is always on. Detected PP gadget reads are printed
-to stderr.
+Detected PP gadget reads are printed to stderr.
+
+### Why `--no-use-ic --no-opt`?
+
+V8 uses Inline Caches (IC) and optimizing compilers (TurboFan/Maglev) to speed
+up property access. Once cached, property reads bypass `Object::GetProperty()`
+entirely — which is where our detection hook lives. These flags force all
+property accesses through the slow path so every read is intercepted.
 
 ## Test
 
@@ -88,5 +94,12 @@ obj.constructor;
 
 - **DATA case only**: ACCESSOR case (getter/setter on `Object.prototype`) is not
   detected
+- **Requires `--no-use-ic --no-opt`**: Detection relies on the slow property
+  lookup path; IC/optimized code bypasses it
 - **Always on**: No flag to toggle on/off (proof of concept)
 - **stderr only**: No file logging
+
+## TODO
+
+- [ ] Add a V8 flag (e.g. `--pp-detect`) to toggle gadget detection on/off
+- [ ] Add an option to write detection output to a file instead of stderr
