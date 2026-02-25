@@ -1757,10 +1757,9 @@ RUNTIME_FUNCTION(Runtime_ReportPPGadget) {
 
   // PP gadget detected! Log to stderr.
   PrintF(stderr, "\n[PP-GADGET] Read from Object.prototype detected!\n");
-  PrintF(stderr, "  Property: ");
-  ShortPrint(*name, stderr);
-  PrintF(stderr, "\n");
-  isolate->PrintStack(stderr, Isolate::kPrintStackVerbose);
+  PrintF(stderr, "  Property: %s\n",
+         Cast<String>(*name)->ToCString().get());
+  isolate->PrintStack(stderr, Isolate::kPrintStackConcise);
   PrintF(stderr, "\n");
 
   return ReadOnlyRoots(isolate).undefined_value();

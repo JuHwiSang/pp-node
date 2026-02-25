@@ -1229,61 +1229,6 @@ MaybeDirectHandle<Object> Object::GetLengthFromArrayLike(
   return Object::ToLength(isolate, val);
 }
 
-namespace {
-
-// pp-node: Check if a property name is a built-in Object.prototype property.
-// These should NOT be reported as prototype pollution gadgets.
-bool IsBuiltinObjectPrototypeProperty(Tagged<Name> name, Isolate* isolate) {
-  // Use internalized string pointer comparison where available.
-  ReadOnlyRoots roots(isolate);
-  if (name == roots.constructor_string()) return true;
-  if (name == roots.toString_string()) return true;
-  if (name == roots.valueOf_string()) return true;
-  // For properties without a root internalized string, compare content.
-  if (!IsString(name)) return true;  // Symbols etc. — skip.
-  Tagged<String> str = Cast<String>(name);
-  if (str->IsEqualTo(base::CStrVector("toLocaleString"))) return true;
-  if (str->IsEqualTo(base::CStrVector("hasOwnProperty"))) return true;
-  if (str->IsEqualTo(base::CStrVector("isPrototypeOf"))) return true;
-  if (str->IsEqualTo(base::CStrVector("propertyIsEnumerable"))) return true;
-  if (str->IsEqualTo(base::CStrVector("__defineGetter__"))) return true;
-  if (str->IsEqualTo(base::CStrVector("__defineSetter__"))) return true;
-  if (str->IsEqualTo(base::CStrVector("__lookupGetter__"))) return true;
-  if (str->IsEqualTo(base::CStrVector("__lookupSetter__"))) return true;
-  if (str->IsEqualTo(base::CStrVector("__proto__"))) return true;
-  return false;
-}
-
-// pp-node: Detect and log prototype pollution gadget reads.
-void MaybePrintPPGadget(LookupIterator* it) {
-  if (it->IsElement()) return;  // Ignore index access.
-  Isolate* isolate = it->isolate();
-
-  // Check if holder is Object.prototype.
-  auto holder = it->GetHolder<JSReceiver>();
-  Tagged<NativeContext> native_ctx = isolate->raw_native_context();
-  if (*holder != native_ctx->initial_object_prototype()) return;
-
-  // Filter out built-in properties.
-  DirectHandle<Name> name = it->GetName();
-  if (IsBuiltinObjectPrototypeProperty(*name, isolate)) return;
-
-  // PP gadget detected! Log to stderr.
-  PrintF(stderr, "\n[PP-GADGET] Read from Object.prototype detected!\n");
-  if (IsString(*name)) {
-    PrintF(stderr, "  Property: %s\n",
-           Cast<String>(*name)->ToCString().get());
-  } else {
-    PrintF(stderr, "  Property: <non-string-name>\n");
-  }
-
-  // Print JS stack trace.
-  isolate->PrintStack(stderr, Isolate::kPrintStackConcise);
-  PrintF(stderr, "\n");
-}
-
-}  // namespace
-
 // static
 MaybeHandle<Object> Object::GetProperty(LookupIterator* it,
                                         bool is_global_reference) {
@@ -1334,8 +1279,6 @@ MaybeHandle<Object> Object::GetProperty(LookupIterator* it,
       case LookupIterator::TYPED_ARRAY_INDEX_NOT_FOUND:
         return it->isolate()->factory()->undefined_value();
       case LookupIterator::DATA:
-        // pp-node: Check for prototype pollution gadget read.
-        MaybePrintPPGadget(it);
         return it->GetDataValue();
       case LookupIterator::STRING_LOOKUP_START_OBJECT:
         return it->GetStringPropertyValue();
