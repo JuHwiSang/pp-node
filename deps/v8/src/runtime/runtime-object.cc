@@ -1723,8 +1723,8 @@ RUNTIME_FUNCTION(Runtime_SwissTableDetailsAt) {
 
 // pp-node: Runtime function called from CSA GenericPropertyLoad when a property
 // is read from Object.prototype during prototype chain traversal.
-// This detects potential prototype pollution gadgets.
-RUNTIME_FUNCTION(Runtime_ReportPPGadget) {
+// This detects potential prototype pollution gadget candidates.
+RUNTIME_FUNCTION(Runtime_ReportPPGadgetCandidateProto) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   DirectHandle<Name> name = args.at<Name>(0);
@@ -1755,8 +1755,31 @@ RUNTIME_FUNCTION(Runtime_ReportPPGadget) {
     }
   }
 
-  // PP gadget detected! Log to stderr.
-  PrintF(stderr, "\n[PP-GADGET] Read from Object.prototype detected!\n");
+  // PP gadget candidate detected! Log to stderr.
+  PrintF(stderr, "\n[PP-GADGET-CANDIDATE] Read of non-built-in property from Object.prototype!\n");
+  PrintF(stderr, "  Property: %s\n",
+         Cast<String>(*name)->ToCString().get());
+  isolate->PrintStack(stderr, Isolate::kPrintStackConcise);
+  PrintF(stderr, "\n");
+
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
+// pp-node: Runtime function called from CSA GenericPropertyLoad and
+// HandleLoadICSmiHandlerLoadNamedCase when a property is not found anywhere
+// in the prototype chain. This detects potential prototype pollution gadget
+// candidate sites — if an attacker were to inject this property into
+// Object.prototype, the access would succeed and become a gadget.
+RUNTIME_FUNCTION(Runtime_ReportPPGadgetCandidate) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  DirectHandle<Name> name = args.at<Name>(0);
+
+  // Filter out non-string names (symbols, etc.)
+  if (!IsString(*name)) return ReadOnlyRoots(isolate).undefined_value();
+
+  // PP gadget candidate detected! Log to stderr.
+  PrintF(stderr, "\n[PP-GADGET-CANDIDATE] Non-existent property access detected!\n");
   PrintF(stderr, "  Property: %s\n",
          Cast<String>(*name)->ToCString().get());
   isolate->PrintStack(stderr, Isolate::kPrintStackConcise);

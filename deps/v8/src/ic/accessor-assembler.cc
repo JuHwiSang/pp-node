@@ -821,6 +821,10 @@ void AccessorAssembler::HandleLoadICSmiHandlerLoadNamedCase(
                                   p->name());
   } else {
     DCHECK_EQ(OnNonExistent::kReturnUndefined, on_nonexistent);
+    // pp-node: Non-existent property access — potential PP gadget candidate.
+    // This runs on the IC cached fast path for repeated accesses to
+    // properties that were previously found to not exist.
+    CallRuntime(Runtime::kReportPPGadgetCandidate, p->context(), p->name());
     exit_point->Return(UndefinedConstant());
   }
 
@@ -3026,7 +3030,7 @@ void AccessorAssembler::GenericPropertyLoad(
         Label not_pp_gadget(this);
         GotoIfNot(TaggedEqual(proto, initial_object_proto), &not_pp_gadget);
         // Call runtime to log the PP gadget detection.
-        CallRuntime(Runtime::kReportPPGadget, p->context(), name);
+        CallRuntime(Runtime::kReportPPGadgetCandidateProto, p->context(), name);
         Goto(&not_pp_gadget);
         BIND(&not_pp_gadget);
       }
@@ -3044,6 +3048,13 @@ void AccessorAssembler::GenericPropertyLoad(
     }
 
     BIND(&return_undefined);
+    {
+      // pp-node: Property not found anywhere in the prototype chain.
+      // This is a potential PP gadget candidate site — if an attacker
+      // were to inject this property into Object.prototype, it would
+      // be read here instead of returning undefined.
+      CallRuntime(Runtime::kReportPPGadgetCandidate, p->context(), name);
+    }
     Return(UndefinedConstant());
   }
 
