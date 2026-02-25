@@ -452,6 +452,18 @@ MaybeDirectHandle<Object> LoadIC::Load(Handle<JSAny> object, Handle<Name> name,
     if (it.IsFound()) {
       return result;
     } else if (!ShouldThrowReferenceError()) {
+      // pp-node: Non-existent property access — potential PP gadget candidate.
+      // This C++ path is taken on IC miss (first access, REPL, etc.)
+      // before the IC caches a kNonExistent handler for subsequent accesses.
+      if (IsString(*name)) {
+        PrintF(stderr,
+               "\n[PP-GADGET-CANDIDATE] Non-existent property access "
+               "detected!\n");
+        PrintF(stderr, "  Property: %s\n",
+               Cast<String>(*name)->ToCString().get());
+        isolate()->PrintStack(stderr, Isolate::kPrintStackConcise);
+        PrintF(stderr, "\n");
+      }
       return result;
     }
   }

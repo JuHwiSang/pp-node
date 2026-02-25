@@ -34,35 +34,43 @@ obj.prop
   → Ignition bytecode handler (LdaNamedProperty)
   → LoadIC_BytecodeHandler (CSA machine code)
   → IC hit?  → handler executes directly (no C++ involved)
-              → kNonExistent handler? → return undefined (Interception Point 2)
-  → IC miss? → GenericPropertyLoad (CSA machine code)
-               → lookup_prototype_chain loop
-               → Walks up the prototype chain in machine code
-               → Found on Object.prototype?
-                  → return_value: Calls Runtime_ReportPPGadgetCandidateProto (Interception Point 1)
-               → Not found anywhere (proto == null)?
-                  → return_undefined: Calls Runtime_ReportPPGadgetCandidate (Interception Point 3)
+              → kNonExistent handler? → report + return undefined (IP2)
+  → IC miss? → C++ Runtime_LoadIC_Miss → LoadIC::Load
+               → LookupIterator: walk prototype chain in C++
+               → Not found? → report + return undefined (IP4)
+               → UpdateCaches: installs kNonExistent handler for next time
+  → Megamorphic? → GenericPropertyLoad (CSA machine code)
+                    → lookup_prototype_chain loop in machine code
+                    → Found on Object.prototype?
+                       → report (IP1)
+                    → Not found anywhere (proto == null)?
+                       → report + return undefined (IP3)
 ```
 
-**Key insight**: V8's CodeStubAssembler (CSA) generates machine code that
-traverses the prototype chain and returns values **without ever entering C++**.
-This means hooking `Object::GetProperty()` alone is insufficient — the CSA fast
-path bypasses it entirely.
+**Key insight**: V8 has **three separate execution paths** for property access:
+
+1. **IC hit** (CSA) — cached handler executes in machine code, no C++ involved
+2. **IC miss** (C++) — first access, falls through to C++ `LoadIC::Load`
+3. **Megamorphic** (CSA) — too many different maps, uses `GenericPropertyLoad`
+
+All three paths must be hooked to catch every non-existent property access.
 
 ### Interception Points
 
-There are **three** interception points in V8's CSA-generated machine code:
+There are **four** interception points:
 
-#### IP1: Property found on Object.prototype (`return_value` label)
+#### IP1: Property found on Object.prototype (CSA `return_value` label)
 
 Located in `GenericPropertyLoad()` in `accessor-assembler.cc`, at the
 `return_value` label of the `lookup_prototype_chain` loop. When a property is
-found on `Object.prototype`, a C++ runtime callback (`Runtime_ReportPPGadget`)
-is called to perform the filtering and logging.
+found on `Object.prototype`, a C++ runtime callback
+(`Runtime_ReportPPGadgetCandidateProto`) is called to filter built-in properties
+and log.
 
-This catches: `Object.prototype.x = 1; ({}).x` — _actual_ pollution reads.
+This catches: `Object.prototype.x = 1; ({}).x` — active pollution reads via the
+megamorphic CSA path.
 
-#### IP2: IC cached non-existent handler (`nonexistent` label)
+#### IP2: IC cached non-existent handler (CSA `nonexistent` label)
 
 Located in `HandleLoadICSmiHandlerLoadNamedCase()` in `accessor-assembler.cc`.
 After the first lookup determines a property doesn't exist, V8 caches a
@@ -73,14 +81,24 @@ property on objects with the same map hit this cached handler, returning
 
 This catches: repeated `obj.nonExistent` accesses via the IC fast path.
 
-#### IP3: Prototype chain miss (`return_undefined` label)
+#### IP3: Prototype chain miss (CSA `return_undefined` label)
 
 Located in `GenericPropertyLoad()` in `accessor-assembler.cc`, at the
-`return_undefined` label. When the prototype chain walk reaches `null` (the end)
-without finding the property, this path returns `undefined`. The hook calls
-`Runtime_ReportPPGadgetCandidate` before returning.
+`return_undefined` label. When the megamorphic prototype chain walk reaches
+`null` without finding the property, this path returns `undefined`. The hook
+calls `Runtime_ReportPPGadgetCandidate` before returning.
 
-This catches: first-time `obj.nonExistent` accesses via the slow path.
+This catches: `obj.nonExistent` accesses via the megamorphic CSA slow path.
+
+#### IP4: IC miss — C++ slow path (`LoadIC::Load`)
+
+Located in `LoadIC::Load()` in `ic.cc`. When the IC has no cached handler (first
+access, REPL input, new script context), `Runtime_LoadIC_Miss` is called and the
+lookup happens entirely in C++. When the property is not found, the PP gadget
+candidate is reported inline before returning `undefined`.
+
+This catches: **first-time** `{}.test` accesses, REPL usage, and any case where
+the IC is uninitialized.
 
 ### Filtered Built-in Properties
 
@@ -151,13 +169,14 @@ obj.x;
 
 ## Modified Files
 
-| File                                    | What                                                                                                                                                                                                                        | Why                                                                                                                                                                                                                                                        |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deps/v8/src/ic/accessor-assembler.cc`  | **IP1**: Added Object.prototype check in `GenericPropertyLoad()`'s `lookup_prototype_chain` → `return_value` path. Calls `Runtime_ReportPPGadgetCandidateProto` when a non-built-in property is read from Object.prototype. | This is where V8's CSA machine code traverses the prototype chain and returns values directly without entering C++. It is the only point where prototype chain lookups can be intercepted in the fast path.                                                |
-| `deps/v8/src/ic/accessor-assembler.cc`  | **IP2**: Added `Runtime_ReportPPGadgetCandidate` call in `HandleLoadICSmiHandlerLoadNamedCase()`'s `nonexistent` label, before returning `undefined`.                                                                       | After the first lookup, V8 caches a `kNonExistent` handler in the IC. Subsequent accesses to the same non-existent property hit this cached handler, bypassing the prototype chain walk entirely. Without this hook, repeated accesses would be invisible. |
-| `deps/v8/src/ic/accessor-assembler.cc`  | **IP3**: Added `Runtime_ReportPPGadgetCandidate` call in `GenericPropertyLoad()`'s `return_undefined` label, before returning `undefined`.                                                                                  | When the prototype chain walk reaches `null` without finding the property, this slow path returns `undefined`. This is where first-time non-existent property accesses are intercepted.                                                                    |
-| `deps/v8/src/runtime/runtime-object.cc` | Added `Runtime_ReportPPGadgetCandidateProto` (filters built-in property names, logs to stderr) and `Runtime_ReportPPGadgetCandidate` (logs non-existent property accesses to stderr).                                       | CSA machine code cannot perform complex operations like string comparison against a list or stderr I/O. The heavy lifting is delegated to these C++ runtime callbacks.                                                                                     |
-| `deps/v8/src/runtime/runtime.h`         | Added `F(ReportPPGadgetCandidateProto, 1, 1)` and `F(ReportPPGadgetCandidate, 1, 1)` to `FOR_EACH_INTRINSIC_INTERNAL` macro.                                                                                                | V8 requires runtime functions to be registered in this macro to generate `Runtime::kReportPPGadgetCandidateProto` and `Runtime::kReportPPGadgetCandidate` IDs that CSA code can use with `CallRuntime()`.                                                  |
+| File                                    | What                                                                                                                                             | Why                                                                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deps/v8/src/ic/accessor-assembler.cc`  | **IP1**: Added Object.prototype check in `GenericPropertyLoad()`'s `return_value` path. Calls `Runtime_ReportPPGadgetCandidateProto`.            | Catches non-built-in property reads from Object.prototype via the megamorphic CSA path.                                                           |
+| `deps/v8/src/ic/accessor-assembler.cc`  | **IP2**: Added `Runtime_ReportPPGadgetCandidate` call in `HandleLoadICSmiHandlerLoadNamedCase()`'s `nonexistent` label.                          | Catches repeated non-existent property accesses via the IC cached `kNonExistent` handler.                                                         |
+| `deps/v8/src/ic/accessor-assembler.cc`  | **IP3**: Added `Runtime_ReportPPGadgetCandidate` call in `GenericPropertyLoad()`'s `return_undefined` label.                                     | Catches first-time non-existent property accesses via the megamorphic CSA slow path.                                                              |
+| `deps/v8/src/ic/ic.cc`                  | **IP4**: Added inline PP gadget candidate reporting in `LoadIC::Load()` when `!it.IsFound()`.                                                    | Catches first-time non-existent property accesses via C++ IC miss path (REPL, new scripts, uninitialized IC). This is the most commonly hit path. |
+| `deps/v8/src/runtime/runtime-object.cc` | Added `Runtime_ReportPPGadgetCandidateProto` (filters built-in properties) and `Runtime_ReportPPGadgetCandidate` (non-existent property access). | C++ runtime callbacks for CSA hooks (IP1-3).                                                                                                      |
+| `deps/v8/src/runtime/runtime.h`         | Registered both runtime functions in `FOR_EACH_INTRINSIC_INTERNAL`.                                                                              | Required for CSA `CallRuntime()` to reference them.                                                                                               |
 
 ## Limitations
 
