@@ -38,22 +38,35 @@ obj.prop
   → IC miss? → C++ Runtime_LoadIC_Miss → LoadIC::Load
                → LookupIterator: walk prototype chain in C++
                → Not found? → report + return undefined (IP4)
-               → UpdateCaches: installs kNonExistent handler for next time
-  → Megamorphic? → GenericPropertyLoad (CSA machine code)
-                    → lookup_prototype_chain loop in machine code
-                    → Found on Object.prototype?
-                       → report (IP1)
-                    → Not found anywhere (proto == null)?
-                       → report + return undefined (IP3)
+               → Found? → return value (no PP hook on this path)
+               → UpdateCaches: installs handler for next time
+  → Megamorphic/Generic? → GenericPropertyLoad (CSA machine code)
+                            → lookup_prototype_chain loop in machine code
+                            → Found on Object.prototype?
+                               → report (IP1) + return value
+                            → Not found anywhere (proto == null)?
+                               → report + return undefined (IP3)
 ```
 
 **Key insight**: V8 has **three separate execution paths** for property access:
 
 1. **IC hit** (CSA) — cached handler executes in machine code, no C++ involved
-2. **IC miss** (C++) — first access, falls through to C++ `LoadIC::Load`
-3. **Megamorphic** (CSA) — too many different maps, uses `GenericPropertyLoad`
+2. **IC miss** (C++) — first access at a given code site, falls through to C++
+   `LoadIC::Load`. After the lookup, `UpdateCaches` installs a handler so the
+   next access at the same site takes the IC hit path.
+3. **Megamorphic/Generic** (CSA) — too many different receiver maps at one code
+   site, or the `Builtins::kGetProperty` stub. Falls back to
+   `GenericPropertyLoad` which walks the prototype chain in machine code.
 
 All three paths must be hooked to catch every non-existent property access.
+
+> **Coverage note**: Object.prototype pollution reads (type 1) are only detected
+> on the megamorphic/generic CSA path (IP1). The IC miss C++ path (IP4) only
+> detects non-existent property accesses (type 2). In practice this gap is small
+> because after the first IC miss, `UpdateCaches` installs a handler and
+> subsequent accesses go through the IC hit path (which has appropriate
+> handlers) or eventually transition to the megamorphic path (where IP1 catches
+> it).
 
 ### Interception Points
 
@@ -63,12 +76,14 @@ There are **four** interception points:
 
 Located in `GenericPropertyLoad()` in `accessor-assembler.cc`, at the
 `return_value` label of the `lookup_prototype_chain` loop. When a property is
-found on `Object.prototype`, a C++ runtime callback
-(`Runtime_ReportPPGadgetCandidateProto`) is called to filter built-in properties
-and log.
+found on `Object.prototype` (checked via `TaggedEqual` against
+`INITIAL_OBJECT_PROTOTYPE_INDEX`), a C++ runtime callback
+(`Runtime_ReportPPGadgetCandidateProto`) is called. The runtime function filters
+out standard built-in properties (see list below) and logs the rest.
 
-This catches: `Object.prototype.x = 1; ({}).x` — active pollution reads via the
-megamorphic CSA path.
+This catches: `Object.prototype.x = 1; ({}).x` — active pollution reads. This
+path is taken when the IC is megamorphic or when `GenericPropertyLoad` is used
+as a generic lookup fallback.
 
 #### IP2: IC cached non-existent handler (CSA `nonexistent` label)
 
@@ -84,21 +99,29 @@ This catches: repeated `obj.nonExistent` accesses via the IC fast path.
 #### IP3: Prototype chain miss (CSA `return_undefined` label)
 
 Located in `GenericPropertyLoad()` in `accessor-assembler.cc`, at the
-`return_undefined` label. When the megamorphic prototype chain walk reaches
-`null` without finding the property, this path returns `undefined`. The hook
-calls `Runtime_ReportPPGadgetCandidate` before returning.
+`return_undefined` label. When the prototype chain walk reaches `null` (via
+`proto == null` check) without finding the property, this path returns
+`undefined`. The hook calls `Runtime_ReportPPGadgetCandidate` before returning.
 
-This catches: `obj.nonExistent` accesses via the megamorphic CSA slow path.
+This catches: `obj.nonExistent` accesses via the `GenericPropertyLoad` CSA path
+(megamorphic IC, or first-time generic lookup).
 
 #### IP4: IC miss — C++ slow path (`LoadIC::Load`)
 
-Located in `LoadIC::Load()` in `ic.cc`. When the IC has no cached handler (first
-access, REPL input, new script context), `Runtime_LoadIC_Miss` is called and the
-lookup happens entirely in C++. When the property is not found, the PP gadget
-candidate is reported inline before returning `undefined`.
+Located in `LoadIC::Load()` in `ic.cc`, at the
+`!it.IsFound() &&
+!ShouldThrowReferenceError()` branch. When the IC has no
+cached handler (first access at a given code site, REPL input, new script
+context), `Runtime_LoadIC_Miss` is invoked and the lookup happens entirely in
+C++ via `LookupIterator`. When the property is not found (`!it.IsFound()`), the
+PP gadget candidate is reported inline (using `PrintF` + `PrintStack`) before
+returning `undefined`. Non-string names (Symbols) are filtered out via
+`IsString(*name)` check.
 
 This catches: **first-time** `{}.test` accesses, REPL usage, and any case where
-the IC is uninitialized.
+the IC is uninitialized. This is the **most commonly hit path** for non-existent
+property detection because every property access starts as an IC miss before a
+handler is installed.
 
 ### Filtered Built-in Properties
 
@@ -111,25 +134,33 @@ gadget candidates (for IP1 only):
 
 ## Example Output
 
+When running `test_pp.js` (see Test section below), output on stderr looks like:
+
 ```
 [PP-GADGET-CANDIDATE] Read of non-built-in property from Object.prototype!
   Property: polluted
 
 ==== JS stack trace =========================================
 
-    at myFunction (test.js:5:19)
-    at main (test.js:10:3)
+    0: ExitFrame [pc: 0x...]
+    1: StubFrame [pc: 0x...]
+    2: /* anonymous */ [0x...] [test_pp.js:5] [bytecode=... offset=...]
+    ...
 =====================
 
 [PP-GADGET-CANDIDATE] Non-existent property access detected!
-  Property: nonExistentProp
+  Property: nonExistent
 
 ==== JS stack trace =========================================
 
-    at myFunction (test.js:6:19)
-    at main (test.js:10:3)
+    0: ExitFrame [pc: 0x...]
+    ...
 =====================
 ```
+
+> Note: Stack trace format is V8's internal `PrintStack(kPrintStackConcise)`,
+> which includes native frames, bytecode offsets, and hex addresses — not the
+> standard JavaScript `Error.stack` format.
 
 ## Usage
 
@@ -186,6 +217,14 @@ obj.x;
 - **stderr only**: No file logging
 - **No deduplication**: Same gadget candidate may be reported multiple times for
   repeated accesses
+- **REPL noise**: In the Node.js REPL, internal machinery (e.g. acorn parser in
+  `getInputPreview`, tab completion) generates false positive reports for normal
+  built-in-related property accesses
+- **Object.prototype read coverage gap on IC miss path**: When a polluted
+  property is first accessed (IC miss → C++ `LoadIC::Load`), the property IS
+  found on Object.prototype so `it.IsFound()` is true — IP4 does not fire.
+  However, after `UpdateCaches` installs a handler, subsequent accesses will hit
+  the IC fast path or eventually the megamorphic path where IP1 catches it.
 
 ## TODO
 

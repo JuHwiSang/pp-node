@@ -455,14 +455,31 @@ MaybeDirectHandle<Object> LoadIC::Load(Handle<JSAny> object, Handle<Name> name,
       // pp-node: Non-existent property access — potential PP gadget candidate.
       // This C++ path is taken on IC miss (first access, REPL, etc.)
       // before the IC caches a kNonExistent handler for subsequent accesses.
-      if (IsString(*name)) {
-        PrintF(stderr,
-               "\n[PP-GADGET-CANDIDATE] Non-existent property access "
-               "detected!\n");
-        PrintF(stderr, "  Property: %s\n",
-               Cast<String>(*name)->ToCString().get());
-        isolate()->PrintStack(stderr, Isolate::kPrintStackConcise);
-        PrintF(stderr, "\n");
+      // Only report if Object.prototype is in the receiver's prototype chain.
+      // Objects created with Object.create(null) are immune to PP.
+      if (IsString(*name) && IsJSReceiver(*object)) {
+        DirectHandle<NativeContext> native_ctx(
+            isolate()->context()->native_context(), isolate());
+        Tagged<Object> initial_object_proto =
+            native_ctx->get(Context::INITIAL_OBJECT_PROTOTYPE_INDEX);
+        bool has_object_proto = false;
+        PrototypeIterator iter(isolate(), Cast<JSReceiver>(*object));
+        while (!iter.IsAtEnd()) {
+          if (*iter.GetCurrent() == initial_object_proto) {
+            has_object_proto = true;
+            break;
+          }
+          iter.Advance();
+        }
+        if (has_object_proto) {
+          PrintF(stderr,
+                 "\n[PP-GADGET-CANDIDATE] Non-existent property access "
+                 "detected!\n");
+          PrintF(stderr, "  Property: %s\n",
+                 Cast<String>(*name)->ToCString().get());
+          isolate()->PrintStack(stderr, Isolate::kPrintStackConcise);
+          PrintF(stderr, "\n");
+        }
       }
       return result;
     }

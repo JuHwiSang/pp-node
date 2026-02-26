@@ -303,7 +303,7 @@ constexpr bool CanTriggerGC(T... properties) {
   I(AddLhsIsStringConstantInternalize, 4, 1)               \
   I(AddRhsIsStringConstantInternalize, 4, 1)               \
   F(ReportPPGadgetCandidateProto, 1, 1)                        \
-  F(ReportPPGadgetCandidate, 1, 1)
+  F(ReportPPGadgetCandidate, 2, 1)
 
 #define FOR_EACH_INTRINSIC_LITERALS(F, I) \
   F(CreateArrayLiteral, 4, 1)             \

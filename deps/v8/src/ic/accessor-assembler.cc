@@ -824,7 +824,8 @@ void AccessorAssembler::HandleLoadICSmiHandlerLoadNamedCase(
     // pp-node: Non-existent property access — potential PP gadget candidate.
     // This runs on the IC cached fast path for repeated accesses to
     // properties that were previously found to not exist.
-    CallRuntime(Runtime::kReportPPGadgetCandidate, p->context(), p->name());
+    CallRuntime(Runtime::kReportPPGadgetCandidate, p->context(), p->name(),
+                p->receiver());
     exit_point->Return(UndefinedConstant());
   }
 
@@ -3053,7 +3054,8 @@ void AccessorAssembler::GenericPropertyLoad(
       // This is a potential PP gadget candidate site — if an attacker
       // were to inject this property into Object.prototype, it would
       // be read here instead of returning undefined.
-      CallRuntime(Runtime::kReportPPGadgetCandidate, p->context(), name);
+      CallRuntime(Runtime::kReportPPGadgetCandidate, p->context(), name,
+                  p->receiver());
     }
     Return(UndefinedConstant());
   }

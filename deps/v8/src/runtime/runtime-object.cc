@@ -17,6 +17,7 @@
 #include "src/objects/property-descriptor-object.h"
 #include "src/objects/property-descriptor.h"
 #include "src/objects/property-details.h"
+#include "src/objects/prototype.h"
 #include "src/objects/swiss-name-dictionary-inl.h"
 #include "src/runtime/runtime.h"
 
@@ -1770,13 +1771,41 @@ RUNTIME_FUNCTION(Runtime_ReportPPGadgetCandidateProto) {
 // in the prototype chain. This detects potential prototype pollution gadget
 // candidate sites — if an attacker were to inject this property into
 // Object.prototype, the access would succeed and become a gadget.
+//
+// Only reports if Object.prototype is in the receiver's prototype chain.
+// Objects created with Object.create(null) are filtered out as they are
+// immune to prototype pollution.
 RUNTIME_FUNCTION(Runtime_ReportPPGadgetCandidate) {
   HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
+  DCHECK_EQ(2, args.length());
   DirectHandle<Name> name = args.at<Name>(0);
+  DirectHandle<Object> receiver = args.at(1);
 
   // Filter out non-string names (symbols, etc.)
   if (!IsString(*name)) return ReadOnlyRoots(isolate).undefined_value();
+
+  // Filter out non-JSReceiver receivers (Smis, etc.)
+  if (!IsJSReceiver(*receiver)) return ReadOnlyRoots(isolate).undefined_value();
+
+  // Check if Object.prototype is in the receiver's prototype chain.
+  // If not (e.g., Object.create(null)), skip reporting — the receiver is
+  // immune to prototype pollution.
+  DirectHandle<NativeContext> native_context(isolate->context()->native_context(),
+                                             isolate);
+  Tagged<Object> initial_object_proto =
+      native_context->get(Context::INITIAL_OBJECT_PROTOTYPE_INDEX);
+
+  bool has_object_proto = false;
+  PrototypeIterator iter(isolate, Cast<JSReceiver>(*receiver));
+  while (!iter.IsAtEnd()) {
+    if (*iter.GetCurrent() == initial_object_proto) {
+      has_object_proto = true;
+      break;
+    }
+    iter.Advance();
+  }
+
+  if (!has_object_proto) return ReadOnlyRoots(isolate).undefined_value();
 
   // PP gadget candidate detected! Log to stderr.
   PrintF(stderr, "\n[PP-GADGET-CANDIDATE] Non-existent property access detected!\n");
