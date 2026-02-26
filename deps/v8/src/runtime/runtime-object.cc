@@ -1790,10 +1790,8 @@ RUNTIME_FUNCTION(Runtime_ReportPPGadgetCandidate) {
   // Check if Object.prototype is in the receiver's prototype chain.
   // If not (e.g., Object.create(null)), skip reporting — the receiver is
   // immune to prototype pollution.
-  DirectHandle<NativeContext> native_context(isolate->context()->native_context(),
-                                             isolate);
-  Tagged<Object> initial_object_proto =
-      native_context->get(Context::INITIAL_OBJECT_PROTOTYPE_INDEX);
+  Tagged<JSObject> initial_object_proto =
+      isolate->native_context()->initial_object_prototype();
 
   bool has_object_proto = false;
   PrototypeIterator iter(isolate, Cast<JSReceiver>(*receiver));

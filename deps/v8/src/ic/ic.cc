@@ -458,10 +458,8 @@ MaybeDirectHandle<Object> LoadIC::Load(Handle<JSAny> object, Handle<Name> name,
       // Only report if Object.prototype is in the receiver's prototype chain.
       // Objects created with Object.create(null) are immune to PP.
       if (IsString(*name) && IsJSReceiver(*object)) {
-        DirectHandle<NativeContext> native_ctx(
-            isolate()->context()->native_context(), isolate());
-        Tagged<Object> initial_object_proto =
-            native_ctx->get(Context::INITIAL_OBJECT_PROTOTYPE_INDEX);
+        Tagged<JSObject> initial_object_proto =
+            isolate()->native_context()->initial_object_prototype();
         bool has_object_proto = false;
         PrototypeIterator iter(isolate(), Cast<JSReceiver>(*object));
         while (!iter.IsAtEnd()) {
