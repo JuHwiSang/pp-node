@@ -236,5 +236,3 @@ obj.x;
 
 - [ ] Add a V8 flag (e.g. `--pp-detect`) to toggle gadget detection on/off
 - [ ] Add an option to write detection output to a file instead of stderr
-- [ ] Add deduplication to suppress repeated reports for the same (property
-      name, source location) pair
