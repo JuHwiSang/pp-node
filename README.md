@@ -92,7 +92,10 @@ After the first lookup determines a property doesn't exist, V8 caches a
 `kNonExistent` handler in the IC (Inline Cache). Subsequent accesses to the same
 property on objects with the same map hit this cached handler, returning
 `undefined` directly from machine code. The hook calls
-`Runtime_ReportPPGadgetCandidate` before returning `undefined`.
+`Runtime_ReportPPGadgetCandidate` with the property name and receiver before
+returning `undefined`. The runtime function checks if `Object.prototype` is in
+the receiver's prototype chain — if not (e.g., `Object.create(null)`), the
+report is skipped.
 
 This catches: repeated `obj.nonExistent` accesses via the IC fast path.
 
@@ -101,7 +104,8 @@ This catches: repeated `obj.nonExistent` accesses via the IC fast path.
 Located in `GenericPropertyLoad()` in `accessor-assembler.cc`, at the
 `return_undefined` label. When the prototype chain walk reaches `null` (via
 `proto == null` check) without finding the property, this path returns
-`undefined`. The hook calls `Runtime_ReportPPGadgetCandidate` before returning.
+`undefined`. The hook calls `Runtime_ReportPPGadgetCandidate` with the property
+name and receiver before returning. Same `Object.prototype` chain filter as IP2.
 
 This catches: `obj.nonExistent` accesses via the `GenericPropertyLoad` CSA path
 (megamorphic IC, or first-time generic lookup).
@@ -114,9 +118,11 @@ Located in `LoadIC::Load()` in `ic.cc`, at the
 cached handler (first access at a given code site, REPL input, new script
 context), `Runtime_LoadIC_Miss` is invoked and the lookup happens entirely in
 C++ via `LookupIterator`. When the property is not found (`!it.IsFound()`), the
-PP gadget candidate is reported inline (using `PrintF` + `PrintStack`) before
-returning `undefined`. Non-string names (Symbols) are filtered out via
-`IsString(*name)` check.
+code checks: (1) `IsString(*name)` to filter out Symbols, (2)
+`IsJSReceiver(*object)` and walks the receiver's prototype chain via
+`PrototypeIterator` to verify `Object.prototype` is present. Only if both checks
+pass is the PP gadget candidate reported inline (using `PrintF` + `PrintStack`)
+before returning `undefined`.
 
 This catches: **first-time** `{}.test` accesses, REPL usage, and any case where
 the IC is uninitialized. This is the **most commonly hit path** for non-existent
@@ -200,14 +206,14 @@ obj.x;
 
 ## Modified Files
 
-| File                                    | What                                                                                                                                             | Why                                                                                                                                               |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deps/v8/src/ic/accessor-assembler.cc`  | **IP1**: Added Object.prototype check in `GenericPropertyLoad()`'s `return_value` path. Calls `Runtime_ReportPPGadgetCandidateProto`.            | Catches non-built-in property reads from Object.prototype via the megamorphic CSA path.                                                           |
-| `deps/v8/src/ic/accessor-assembler.cc`  | **IP2**: Added `Runtime_ReportPPGadgetCandidate` call in `HandleLoadICSmiHandlerLoadNamedCase()`'s `nonexistent` label.                          | Catches repeated non-existent property accesses via the IC cached `kNonExistent` handler.                                                         |
-| `deps/v8/src/ic/accessor-assembler.cc`  | **IP3**: Added `Runtime_ReportPPGadgetCandidate` call in `GenericPropertyLoad()`'s `return_undefined` label.                                     | Catches first-time non-existent property accesses via the megamorphic CSA slow path.                                                              |
-| `deps/v8/src/ic/ic.cc`                  | **IP4**: Added inline PP gadget candidate reporting in `LoadIC::Load()` when `!it.IsFound()`.                                                    | Catches first-time non-existent property accesses via C++ IC miss path (REPL, new scripts, uninitialized IC). This is the most commonly hit path. |
-| `deps/v8/src/runtime/runtime-object.cc` | Added `Runtime_ReportPPGadgetCandidateProto` (filters built-in properties) and `Runtime_ReportPPGadgetCandidate` (non-existent property access). | C++ runtime callbacks for CSA hooks (IP1-3).                                                                                                      |
-| `deps/v8/src/runtime/runtime.h`         | Registered both runtime functions in `FOR_EACH_INTRINSIC_INTERNAL`.                                                                              | Required for CSA `CallRuntime()` to reference them.                                                                                               |
+| File                                    | What                                                                                                                                                                                         | Why                                                                                                                                             |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deps/v8/src/ic/accessor-assembler.cc`  | **IP1**: Added Object.prototype check in `GenericPropertyLoad()`'s `return_value` path. Calls `Runtime_ReportPPGadgetCandidateProto`.                                                        | Catches non-built-in property reads from Object.prototype via the megamorphic CSA path.                                                         |
+| `deps/v8/src/ic/accessor-assembler.cc`  | **IP2**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `HandleLoadICSmiHandlerLoadNamedCase()`'s `nonexistent` label.                                                      | Catches repeated non-existent property accesses via the IC cached `kNonExistent` handler. Receiver passed for Object.prototype chain filtering. |
+| `deps/v8/src/ic/accessor-assembler.cc`  | **IP3**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `GenericPropertyLoad()`'s `return_undefined` label.                                                                 | Catches first-time non-existent property accesses via the megamorphic CSA slow path. Receiver passed for Object.prototype chain filtering.      |
+| `deps/v8/src/ic/ic.cc`                  | **IP4**: Added inline PP gadget candidate reporting in `LoadIC::Load()` when `!it.IsFound()`. Walks receiver's prototype chain via `PrototypeIterator` to check for `Object.prototype`.      | Catches first-time non-existent property accesses via C++ IC miss path. Filters out `Object.create(null)` objects that are immune to PP.        |
+| `deps/v8/src/runtime/runtime-object.cc` | `Runtime_ReportPPGadgetCandidateProto(name)` filters built-in properties. `Runtime_ReportPPGadgetCandidate(name, receiver)` checks Object.prototype is in receiver's chain before reporting. | C++ runtime callbacks for CSA hooks (IP1-3). The chain filter prevents false positives on null-prototype objects.                               |
+| `deps/v8/src/runtime/runtime.h`         | Registered both runtime functions in `FOR_EACH_INTRINSIC_INTERNAL`. `ReportPPGadgetCandidate` takes 2 args (name, receiver).                                                                 | Required for CSA `CallRuntime()` to reference them.                                                                                             |
 
 ## Limitations
 
