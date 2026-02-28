@@ -140,6 +140,8 @@ gadget candidates (for IP1 only):
 
 ## Example Output
 
+### stderr (default, no flag)
+
 When running `test_pp.js` (see Test section below), output on stderr looks like:
 
 ```
@@ -164,6 +166,22 @@ When running `test_pp.js` (see Test section below), output on stderr looks like:
 =====================
 ```
 
+### JSON Lines file (with `--pp-detect-output`)
+
+When using `--pp-detect-output=result.jsonl`, each detection event is a single
+JSON object on one line:
+
+```jsonl
+{"type":"Read of non-built-in property from Object.prototype!","property":"polluted","stack":"\n==== JS stack trace ...\n"}
+{"type":"Non-existent property access detected!","property":"nonExistent","stack":"\n==== JS stack trace ...\n"}
+```
+
+| Field      | Description                                                                                                                                |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `type`     | Detection type: `"Read of non-built-in property from Object.prototype!"` (IP1) or `"Non-existent property access detected!"` (IP2/IP3/IP4) |
+| `property` | Property name that was accessed                                                                                                            |
+| `stack`    | V8 internal stack trace (`kPrintStackConcise` mode), JSON-escaped                                                                          |
+
 > Note: Stack trace format is V8's internal `PrintStack(kPrintStackConcise)`,
 > which includes native frames, bytecode offsets, and hex addresses — not the
 > standard JavaScript `Error.stack` format.
@@ -174,11 +192,16 @@ When running `test_pp.js` (see Test section below), output on stderr looks like:
 2. Run:
 
 ```bash
+# Default: PP gadget candidates are printed to stderr as plain text
 ./node your_app.js
+
+# File output: write detection results as JSON Lines to a file
+./node --pp-detect-output=result.jsonl your_app.js
 ```
 
-No special V8 flags required. Detected PP gadget candidates are printed to
-stderr.
+No special V8 flags required for detection itself — it is always on. The
+`--pp-detect-output` flag only controls **where and how** results are written
+(JSON Lines file vs. stderr plain text).
 
 ## Test
 
@@ -206,21 +229,29 @@ obj.x;
 
 ## Modified Files
 
-| File                                    | What                                                                                                                                                                                         | Why                                                                                                                                             |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deps/v8/src/ic/accessor-assembler.cc`  | **IP1**: Added Object.prototype check in `GenericPropertyLoad()`'s `return_value` path. Calls `Runtime_ReportPPGadgetCandidateProto`.                                                        | Catches non-built-in property reads from Object.prototype via the megamorphic CSA path.                                                         |
-| `deps/v8/src/ic/accessor-assembler.cc`  | **IP2**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `HandleLoadICSmiHandlerLoadNamedCase()`'s `nonexistent` label.                                                      | Catches repeated non-existent property accesses via the IC cached `kNonExistent` handler. Receiver passed for Object.prototype chain filtering. |
-| `deps/v8/src/ic/accessor-assembler.cc`  | **IP3**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `GenericPropertyLoad()`'s `return_undefined` label.                                                                 | Catches first-time non-existent property accesses via the megamorphic CSA slow path. Receiver passed for Object.prototype chain filtering.      |
-| `deps/v8/src/ic/ic.cc`                  | **IP4**: Added inline PP gadget candidate reporting in `LoadIC::Load()` when `!it.IsFound()`. Walks receiver's prototype chain via `PrototypeIterator` to check for `Object.prototype`.      | Catches first-time non-existent property accesses via C++ IC miss path. Filters out `Object.create(null)` objects that are immune to PP.        |
-| `deps/v8/src/runtime/runtime-object.cc` | `Runtime_ReportPPGadgetCandidateProto(name)` filters built-in properties. `Runtime_ReportPPGadgetCandidate(name, receiver)` checks Object.prototype is in receiver's chain before reporting. | C++ runtime callbacks for CSA hooks (IP1-3). The chain filter prevents false positives on null-prototype objects.                               |
-| `deps/v8/src/runtime/runtime.h`         | Registered both runtime functions in `FOR_EACH_INTRINSIC_INTERNAL`. `ReportPPGadgetCandidate` takes 2 args (name, receiver).                                                                 | Required for CSA `CallRuntime()` to reference them.                                                                                             |
+| File                                    | What                                                                                                                                                                                                | Why                                                                                                                                                                                                                          |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deps/v8/src/flags/flag-definitions.h`  | Added `DEFINE_STRING(pp_detect_output, ...)` V8 flag.                                                                                                                                               | Controls output destination: when set, detection results go to the specified file as JSON Lines; when unset (`nullptr`), falls back to stderr.                                                                               |
+| `deps/v8/src/ic/accessor-assembler.cc`  | **IP1**: Added Object.prototype check in `GenericPropertyLoad()`'s `return_value` path. Calls `Runtime_ReportPPGadgetCandidateProto`.                                                               | Catches non-built-in property reads from Object.prototype via the megamorphic CSA path.                                                                                                                                      |
+| `deps/v8/src/ic/accessor-assembler.cc`  | **IP2**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `HandleLoadICSmiHandlerLoadNamedCase()`'s `nonexistent` label.                                                             | Catches repeated non-existent property accesses via the IC cached `kNonExistent` handler. Receiver passed for Object.prototype chain filtering.                                                                              |
+| `deps/v8/src/ic/accessor-assembler.cc`  | **IP3**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `GenericPropertyLoad()`'s `return_undefined` label.                                                                        | Catches first-time non-existent property accesses via the megamorphic CSA slow path. Receiver passed for Object.prototype chain filtering.                                                                                   |
+| `deps/v8/src/ic/ic.cc`                  | **IP4**: `ReportPPGadget()` helper (anonymous namespace) + call in `LoadIC::Load()` when `!it.IsFound()`. Walks receiver's prototype chain via `PrototypeIterator` to check for `Object.prototype`. | Catches first-time non-existent property accesses via C++ IC miss path. Filters out `Object.create(null)` objects that are immune to PP. Helper is a **deliberate copy** of the one in `runtime-object.cc` (see note below). |
+| `deps/v8/src/runtime/runtime-object.cc` | `ReportPPGadget()` helper (anonymous namespace) + `Runtime_ReportPPGadgetCandidateProto(name)` + `Runtime_ReportPPGadgetCandidate(name, receiver)`. Both runtime functions now call the helper.     | Centralized output logic for IP1-3. Supports JSON Lines file output (when `--pp-detect-output` is set) or stderr plain text (default).                                                                                       |
+| `deps/v8/src/runtime/runtime.h`         | Registered both runtime functions in `FOR_EACH_INTRINSIC_INTERNAL`. `ReportPPGadgetCandidate` takes 2 args (name, receiver).                                                                        | Required for CSA `CallRuntime()` to reference them.                                                                                                                                                                          |
+
+> **Helper duplication note**: The `ReportPPGadget()` helper function exists in
+> two places — `runtime-object.cc` and `ic.cc` — each inside an anonymous
+> `namespace {}`. This is intentional: extracting to a shared `.h` file would
+> require adding a new V8 header and modifying build files, which introduces
+> risk disproportionate to the ~50 lines of duplicated code. Both copies are
+> identical and should be kept in sync. Each copy has a comment referencing the
+> other.
 
 ## Limitations
 
 - **DATA case only**: ACCESSOR case (getter/setter on `Object.prototype`) is not
   detected
 - **Always on**: No flag to toggle on/off (proof of concept)
-- **stderr only**: No file logging
 - **No deduplication**: Same gadget candidate may be reported multiple times for
   repeated accesses
 - **REPL noise**: In the Node.js REPL, internal machinery (e.g. acorn parser in
@@ -235,4 +266,5 @@ obj.x;
 ## TODO
 
 - [ ] Add a V8 flag (e.g. `--pp-detect`) to toggle gadget detection on/off
-- [ ] Add an option to write detection output to a file instead of stderr
+- [x] Add an option to write detection output to a file instead of stderr
+      (`--pp-detect-output=<file>`, JSON Lines format)

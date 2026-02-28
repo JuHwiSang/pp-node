@@ -3824,6 +3824,11 @@ DEFINE_EXPERIMENTAL_FEATURE(
 DEFINE_BOOL(use_libm_trig_functions, true, "use libm trig functions")
 #endif
 
+// pp-node: Prototype Pollution gadget detection flags
+DEFINE_STRING(pp_detect_output, nullptr,
+              "Write PP gadget detection output to the specified file "
+              "(JSON Lines format). If not set, output goes to stderr as text.")
+
 #undef FLAG
 
 #ifdef VERIFY_PREDICTABLE

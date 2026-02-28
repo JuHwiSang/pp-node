@@ -5,6 +5,7 @@
 #include "src/ic/ic.h"
 
 #include <optional>
+#include <string>
 #include <tuple>
 
 #include "src/api/api-arguments-inl.h"
@@ -327,6 +328,58 @@ bool MigrateDeprecated(Isolate* isolate, DirectHandle<Object> object) {
   return true;
 }
 
+// pp-node: Helper to write PP gadget detection output.
+// If --pp-detect-output is set, appends one JSON Lines object per detection
+// event to the specified file. Otherwise, writes plain text to stderr
+// (existing behavior).
+//
+// NOTE: An identical copy of this function exists in runtime-object.cc
+// (anonymous namespace). This duplication is intentional — extracting to a
+// shared header was deemed too risky for the small amount of code involved.
+// Keep both copies in sync when modifying.
+void ReportPPGadget(Isolate* isolate, const char* type,
+                    const char* property_name) {
+  const char* output_file = v8_flags.pp_detect_output;
+
+  if (output_file != nullptr) {
+    // JSON Lines format: append one JSON object per line.
+    FILE* f = fopen(output_file, "a");
+    if (f != nullptr) {
+      HeapStringAllocator allocator;
+      StringStream accumulator(&allocator);
+      isolate->PrintStack(&accumulator, Isolate::kPrintStackConcise);
+      std::unique_ptr<char[]> stack_str = accumulator.ToCString();
+
+      // Escape JSON-special characters in property name and stack trace.
+      auto escape = [](const char* src) -> std::string {
+        std::string out;
+        for (const char* p = src; *p; ++p) {
+          switch (*p) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:   out += *p; break;
+          }
+        }
+        return out;
+      };
+
+      fprintf(f, "{\"type\":\"%s\",\"property\":\"%s\",\"stack\":\"%s\"}\n",
+              type, escape(property_name).c_str(),
+              escape(stack_str.get()).c_str());
+      fclose(f);
+    }
+  } else {
+    // Default: stderr plain text (existing behavior).
+    PrintF(stderr, "\n[PP-GADGET-CANDIDATE] %s\n", type);
+    PrintF(stderr, "  Property: %s\n", property_name);
+    isolate->PrintStack(stderr, Isolate::kPrintStackConcise);
+    PrintF(stderr, "\n");
+  }
+}
+
 }  // namespace
 
 bool IC::ConfigureVectorState(IC::State new_state, DirectHandle<Object> key) {
@@ -470,13 +523,8 @@ MaybeDirectHandle<Object> LoadIC::Load(Handle<JSAny> object, Handle<Name> name,
           iter.Advance();
         }
         if (has_object_proto) {
-          PrintF(stderr,
-                 "\n[PP-GADGET-CANDIDATE] Non-existent property access "
-                 "detected!\n");
-          PrintF(stderr, "  Property: %s\n",
-                 Cast<String>(*name)->ToCString().get());
-          isolate()->PrintStack(stderr, Isolate::kPrintStackConcise);
-          PrintF(stderr, "\n");
+          ReportPPGadget(isolate(), "Non-existent property access detected!",
+                         Cast<String>(*name)->ToCString().get());
         }
       }
       return result;
