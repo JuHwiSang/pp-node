@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include "src/api/api-arguments-inl.h"
 #include "src/ast/ast.h"
@@ -344,33 +345,47 @@ void ReportPPGadget(Isolate* isolate, const char* type,
 
   if (output_file != nullptr) {
     // JSON Lines format: append one JSON object per line.
-    FILE* f = fopen(output_file, "a");
-    if (f != nullptr) {
-      HeapStringAllocator allocator;
-      StringStream accumulator(&allocator);
-      isolate->PrintStack(&accumulator, Isolate::kPrintStackConcise);
-      std::unique_ptr<char[]> stack_str = accumulator.ToCString();
+    FILE* out = fopen(output_file, "a");
+    if (out != nullptr) {
+      // Capture stack trace via the safe public PrintStack(FILE*) API,
+      // using a temporary file as a buffer. We cannot call
+      // PrintStack(StringStream*) directly because it requires private
+      // isolate state setup (stack_trace_nesting_level_,
+      // ClearMentionedObjectCache, incomplete_message_).
+      std::string stack_text;
+      FILE* tmp = tmpfile();
+      if (tmp != nullptr) {
+        isolate->PrintStack(tmp, Isolate::kPrintStackConcise);
+        long len = ftell(tmp);
+        rewind(tmp);
+        if (len > 0) {
+          std::vector<char> buf(len);
+          size_t read = fread(buf.data(), 1, len, tmp);
+          stack_text.assign(buf.data(), read);
+        }
+        fclose(tmp);
+      }
 
       // Escape JSON-special characters in property name and stack trace.
-      auto escape = [](const char* src) -> std::string {
+      auto escape = [](const std::string& src) -> std::string {
         std::string out;
-        for (const char* p = src; *p; ++p) {
-          switch (*p) {
+        for (char c : src) {
+          switch (c) {
             case '"':  out += "\\\""; break;
             case '\\': out += "\\\\"; break;
             case '\n': out += "\\n"; break;
             case '\r': out += "\\r"; break;
             case '\t': out += "\\t"; break;
-            default:   out += *p; break;
+            default:   out += c; break;
           }
         }
         return out;
       };
 
-      fprintf(f, "{\"type\":\"%s\",\"property\":\"%s\",\"stack\":\"%s\"}\n",
+      fprintf(out, "{\"type\":\"%s\",\"property\":\"%s\",\"stack\":\"%s\"}\n",
               type, escape(property_name).c_str(),
-              escape(stack_str.get()).c_str());
-      fclose(f);
+              escape(stack_text).c_str());
+      fclose(out);
     }
   } else {
     // Default: stderr plain text (existing behavior).
