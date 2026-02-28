@@ -22,6 +22,7 @@
 #include "src/objects/prototype.h"
 #include "src/objects/swiss-name-dictionary-inl.h"
 #include "src/runtime/runtime.h"
+#include "src/strings/string-stream.h"
 
 namespace v8 {
 namespace internal {
