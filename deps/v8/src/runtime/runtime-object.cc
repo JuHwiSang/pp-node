@@ -1738,33 +1738,16 @@ namespace {
 // was deemed too risky for the small amount of code involved. Keep both copies
 // in sync when modifying.
 void ReportPPGadget(Isolate* isolate, const char* type,
+                    const char* short_type,
                     const char* property_name) {
   const char* output_file = v8_flags.pp_detect_output;
+  bool verbose = v8_flags.pp_detect_verbose;
 
   if (output_file != nullptr) {
     // JSON Lines format: append one JSON object per line.
     FILE* out = fopen(output_file, "a");
     if (out != nullptr) {
-      // Capture stack trace via the safe public PrintStack(FILE*) API,
-      // using a temporary file as a buffer. We cannot call
-      // PrintStack(StringStream*) directly because it requires private
-      // isolate state setup (stack_trace_nesting_level_,
-      // ClearMentionedObjectCache, incomplete_message_).
-      std::string stack_text;
-      FILE* tmp = tmpfile();
-      if (tmp != nullptr) {
-        isolate->PrintStack(tmp, Isolate::kPrintStackConcise);
-        long len = ftell(tmp);
-        rewind(tmp);
-        if (len > 0) {
-          std::vector<char> buf(len);
-          size_t read = fread(buf.data(), 1, len, tmp);
-          stack_text.assign(buf.data(), read);
-        }
-        fclose(tmp);
-      }
-
-      // Escape JSON-special characters in property name and stack trace.
+      // Escape JSON-special characters in property name.
       auto escape = [](const std::string& src) -> std::string {
         std::string out;
         for (char c : src) {
@@ -1780,17 +1763,45 @@ void ReportPPGadget(Isolate* isolate, const char* type,
         return out;
       };
 
-      fprintf(out, "{\"type\":\"%s\",\"property\":\"%s\",\"stack\":\"%s\"}\n",
-              type, escape(property_name).c_str(),
-              escape(stack_text).c_str());
+      if (verbose) {
+        // Verbose: full type string + stack trace.
+        // Capture stack trace via the safe public PrintStack(FILE*) API,
+        // using a temporary file as a buffer.
+        std::string stack_text;
+        FILE* tmp = tmpfile();
+        if (tmp != nullptr) {
+          isolate->PrintStack(tmp, Isolate::kPrintStackConcise);
+          long len = ftell(tmp);
+          rewind(tmp);
+          if (len > 0) {
+            std::vector<char> buf(len);
+            size_t read = fread(buf.data(), 1, len, tmp);
+            stack_text.assign(buf.data(), read);
+          }
+          fclose(tmp);
+        }
+        fprintf(out,
+                "{\"type\":\"%s\",\"property\":\"%s\",\"stack\":\"%s\"}\n",
+                type, escape(property_name).c_str(),
+                escape(stack_text).c_str());
+      } else {
+        // Concise: short type, no stack.
+        fprintf(out, "{\"property\":\"%s\",\"type\":\"%s\"}\n",
+                escape(property_name).c_str(), short_type);
+      }
       fclose(out);
     }
   } else {
-    // Default: stderr plain text (existing behavior).
-    PrintF(stderr, "\n[PP-GADGET-CANDIDATE] %s\n", type);
-    PrintF(stderr, "  Property: %s\n", property_name);
-    isolate->PrintStack(stderr, Isolate::kPrintStackConcise);
-    PrintF(stderr, "\n");
+    if (verbose) {
+      // Verbose: full type string + stack trace to stderr.
+      PrintF(stderr, "\n[PP-GADGET-CANDIDATE] %s\n", type);
+      PrintF(stderr, "  Property: %s\n", property_name);
+      isolate->PrintStack(stderr, Isolate::kPrintStackConcise);
+      PrintF(stderr, "\n");
+    } else {
+      // Concise: one-liner to stderr.
+      PrintF(stderr, "[PP] %s (%s)\n", property_name, short_type);
+    }
   }
 }
 
@@ -1833,6 +1844,7 @@ RUNTIME_FUNCTION(Runtime_ReportPPGadgetCandidateProto) {
   // PP gadget candidate detected!
   ReportPPGadget(isolate,
                  "Read of non-built-in property from Object.prototype!",
+                 "proto",
                  Cast<String>(*name)->ToCString().get());
 
   return ReadOnlyRoots(isolate).undefined_value();
@@ -1879,6 +1891,7 @@ RUNTIME_FUNCTION(Runtime_ReportPPGadgetCandidate) {
 
   // PP gadget candidate detected!
   ReportPPGadget(isolate, "Non-existent property access detected!",
+                 "non-existent",
                  Cast<String>(*name)->ToCString().get());
 
   return ReadOnlyRoots(isolate).undefined_value();

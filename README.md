@@ -140,9 +140,39 @@ gadget candidates (for IP1 only):
 
 ## Example Output
 
-### stderr (default, no flag)
+### Concise mode (default)
 
-When running `test_pp.js` (see Test section below), output on stderr looks like:
+By default (without `--pp-detect-verbose`), output is a minimal one-liner per
+detection, showing only the property name:
+
+**stderr:**
+
+```
+[PP] polluted (proto)
+[PP] nonExistent (non-existent)
+```
+
+- `(proto)` suffix indicates the property was read from `Object.prototype` (IP1)
+- `(non-existent)` suffix indicates a non-existent property access (IP2/IP3/IP4)
+
+**JSON Lines** (with `--pp-detect-output=result.jsonl`):
+
+```jsonl
+{"property":"polluted","type":"proto"}
+{"property":"nonExistent","type":"non-existent"}
+```
+
+| Field      | Description                                                       |
+| ---------- | ----------------------------------------------------------------- |
+| `property` | Property name that was accessed                                   |
+| `type`     | Short detection type: `"proto"` (IP1) or `"non-existent"` (IP2-4) |
+
+### Verbose mode (`--pp-detect-verbose`)
+
+With `--pp-detect-verbose`, output includes the full detection type string and
+V8 internal stack trace:
+
+**stderr:**
 
 ```
 [PP-GADGET-CANDIDATE] Read of non-built-in property from Object.prototype!
@@ -155,21 +185,9 @@ When running `test_pp.js` (see Test section below), output on stderr looks like:
     2: /* anonymous */ [0x...] [test_pp.js:5] [bytecode=... offset=...]
     ...
 =====================
-
-[PP-GADGET-CANDIDATE] Non-existent property access detected!
-  Property: nonExistent
-
-==== JS stack trace =========================================
-
-    0: ExitFrame [pc: 0x...]
-    ...
-=====================
 ```
 
-### JSON Lines file (with `--pp-detect-output`)
-
-When using `--pp-detect-output=result.jsonl`, each detection event is a single
-JSON object on one line:
+**JSON Lines** (with `--pp-detect-output=result.jsonl`):
 
 ```jsonl
 {"type":"Read of non-built-in property from Object.prototype!","property":"polluted","stack":"\n==== JS stack trace ...\n"}
@@ -192,16 +210,26 @@ JSON object on one line:
 2. Run:
 
 ```bash
-# Default: PP gadget candidates are printed to stderr as plain text
+# Default: concise output to stderr (one-liner per detection)
 ./node your_app.js
+
+# Verbose: include stack traces and full type descriptions
+./node --pp-detect-verbose your_app.js
 
 # File output: write detection results as JSON Lines to a file
 ./node --pp-detect-output=result.jsonl your_app.js
+
+# Both: verbose JSON Lines file output
+./node --pp-detect-verbose --pp-detect-output=result.jsonl your_app.js
 ```
 
-No special V8 flags required for detection itself — it is always on. The
-`--pp-detect-output` flag only controls **where and how** results are written
-(JSON Lines file vs. stderr plain text).
+No special V8 flags required for detection itself — it is always on.
+
+| Flag                   | Description                                                         |
+| ---------------------- | ------------------------------------------------------------------- |
+| (none)                 | Concise one-liner output to stderr (default)                        |
+| `--pp-detect-verbose`  | Full type descriptions + V8 stack traces                            |
+| `--pp-detect-output=F` | Write to file `F` as JSON Lines (concise or verbose per above flag) |
 
 ## Test
 
@@ -231,7 +259,7 @@ obj.x;
 
 | File                                    | What                                                                                                                                                                                                | Why                                                                                                                                                                                                                          |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deps/v8/src/flags/flag-definitions.h`  | Added `DEFINE_STRING(pp_detect_output, ...)` V8 flag.                                                                                                                                               | Controls output destination: when set, detection results go to the specified file as JSON Lines; when unset (`nullptr`), falls back to stderr.                                                                               |
+| `deps/v8/src/flags/flag-definitions.h`  | Added `DEFINE_STRING(pp_detect_output, ...)` and `DEFINE_BOOL(pp_detect_verbose, ...)` V8 flags.                                                                                                    | `pp_detect_output`: controls output destination. `pp_detect_verbose`: controls output detail level (default concise, verbose adds stack traces).                                                                             |
 | `deps/v8/src/ic/accessor-assembler.cc`  | **IP1**: Added Object.prototype check in `GenericPropertyLoad()`'s `return_value` path. Calls `Runtime_ReportPPGadgetCandidateProto`.                                                               | Catches non-built-in property reads from Object.prototype via the megamorphic CSA path.                                                                                                                                      |
 | `deps/v8/src/ic/accessor-assembler.cc`  | **IP2**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `HandleLoadICSmiHandlerLoadNamedCase()`'s `nonexistent` label.                                                             | Catches repeated non-existent property accesses via the IC cached `kNonExistent` handler. Receiver passed for Object.prototype chain filtering.                                                                              |
 | `deps/v8/src/ic/accessor-assembler.cc`  | **IP3**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `GenericPropertyLoad()`'s `return_undefined` label.                                                                        | Catches first-time non-existent property accesses via the megamorphic CSA slow path. Receiver passed for Object.prototype chain filtering.                                                                                   |
@@ -276,3 +304,7 @@ obj.x;
 - [ ] Add a V8 flag (e.g. `--pp-detect`) to toggle gadget detection on/off
 - [x] Add an option to write detection output to a file instead of stderr
       (`--pp-detect-output=<file>`, JSON Lines format)
+- [x] Add `--pp-detect-verbose` flag for detailed output (stack traces + full
+      type descriptions); default is concise one-liner output
+- [ ] Rename `--pp-detect-*` flags to `--pp-*` (e.g. `--pp-output`,
+      `--pp-verbose`)
