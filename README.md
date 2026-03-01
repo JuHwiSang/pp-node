@@ -9,8 +9,8 @@ during Node.js runtime execution.
 
 Prototype Pollution (PP) is an attack technique that injects arbitrary
 properties into `Object.prototype`. This project modifies V8's property lookup
-pipeline to catch **two types of gadget candidate accesses** and reports them to
-stderr with the full JavaScript stack trace:
+pipeline to catch **two types of gadget candidate accesses** and reports them
+(to stderr by default, or to a JSON Lines file via `--pp-detect-output`):
 
 1. **Non-built-in property read from `Object.prototype`** — A property that was
    added to `Object.prototype` (not a standard built-in) is read through an
@@ -121,7 +121,7 @@ C++ via `LookupIterator`. When the property is not found (`!it.IsFound()`), the
 code checks: (1) `IsString(*name)` to filter out Symbols, (2)
 `IsJSReceiver(*object)` and walks the receiver's prototype chain via
 `PrototypeIterator` to verify `Object.prototype` is present. Only if both checks
-pass is the PP gadget candidate reported inline (using `PrintF` + `PrintStack`)
+pass is the PP gadget candidate reported via the `ReportPPGadget()` helper
 before returning `undefined`.
 
 This catches: **first-time** `{}.test` accesses, REPL usage, and any case where
@@ -246,6 +246,14 @@ obj.x;
 > risk disproportionate to the ~50 lines of duplicated code. Both copies are
 > identical and should be kept in sync. Each copy has a comment referencing the
 > other.
+>
+> **Implementation detail**: The helper captures the V8 stack trace by writing
+> to a `tmpfile()` and reading it back, rather than using
+> `PrintStack(StringStream*)` directly. This is because
+> `PrintStack(StringStream*)` is a private API that requires internal isolate
+> state setup (`stack_trace_nesting_level_`, `ClearMentionedObjectCache`,
+> `incomplete_message_`) that cannot be done from outside the `Isolate` class.
+> `PrintStack(FILE*)` is the safe public API that handles this internally.
 
 ## Limitations
 
