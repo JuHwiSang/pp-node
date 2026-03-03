@@ -1729,7 +1729,7 @@ RUNTIME_FUNCTION(Runtime_SwissTableDetailsAt) {
 namespace {
 
 // pp-node: Helper to write PP gadget detection output.
-// If --pp-detect-output is set, appends one JSON Lines object per detection
+// If --pp-output is set, appends one JSON Lines object per detection
 // event to the specified file. Otherwise, writes plain text to stderr
 // (existing behavior).
 //
@@ -1740,8 +1740,8 @@ namespace {
 void ReportPPGadget(Isolate* isolate, const char* type,
                     const char* short_type,
                     const char* property_name) {
-  const char* output_file = v8_flags.pp_detect_output;
-  bool verbose = v8_flags.pp_detect_verbose;
+  const char* output_file = v8_flags.pp_output;
+  bool verbose = v8_flags.pp_verbose;
 
   if (output_file != nullptr) {
     // JSON Lines format: append one JSON object per line.

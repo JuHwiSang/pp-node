@@ -3825,10 +3825,10 @@ DEFINE_BOOL(use_libm_trig_functions, true, "use libm trig functions")
 #endif
 
 // pp-node: Prototype Pollution gadget detection flags
-DEFINE_STRING(pp_detect_output, nullptr,
+DEFINE_STRING(pp_output, nullptr,
               "Write PP gadget detection output to the specified file "
               "(JSON Lines format). If not set, output goes to stderr as text.")
-DEFINE_BOOL(pp_detect_verbose, false,
+DEFINE_BOOL(pp_verbose, false,
             "Print verbose PP gadget detection output including stack traces "
             "and full type descriptions. Default is concise output.")
 

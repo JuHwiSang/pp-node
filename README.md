@@ -10,7 +10,7 @@ during Node.js runtime execution.
 Prototype Pollution (PP) is an attack technique that injects arbitrary
 properties into `Object.prototype`. This project modifies V8's property lookup
 pipeline to catch **two types of gadget candidate accesses** and reports them
-(to stderr by default, or to a JSON Lines file via `--pp-detect-output`):
+(to stderr by default, or to a JSON Lines file via `--pp-output`):
 
 1. **Non-built-in property read from `Object.prototype`** — A property that was
    added to `Object.prototype` (not a standard built-in) is read through an
@@ -142,7 +142,7 @@ gadget candidates (for IP1 only):
 
 ### Concise mode (default)
 
-By default (without `--pp-detect-verbose`), output is a minimal one-liner per
+By default (without `--pp-verbose`), output is a minimal one-liner per
 detection, showing only the property name:
 
 **stderr:**
@@ -155,7 +155,7 @@ detection, showing only the property name:
 - `(proto)` suffix indicates the property was read from `Object.prototype` (IP1)
 - `(non-existent)` suffix indicates a non-existent property access (IP2/IP3/IP4)
 
-**JSON Lines** (with `--pp-detect-output=result.jsonl`):
+**JSON Lines** (with `--pp-output=result.jsonl`):
 
 ```jsonl
 {"property":"polluted","type":"proto"}
@@ -167,10 +167,10 @@ detection, showing only the property name:
 | `property` | Property name that was accessed                                   |
 | `type`     | Short detection type: `"proto"` (IP1) or `"non-existent"` (IP2-4) |
 
-### Verbose mode (`--pp-detect-verbose`)
+### Verbose mode (`--pp-verbose`)
 
-With `--pp-detect-verbose`, output includes the full detection type string and
-V8 internal stack trace:
+With `--pp-verbose`, output includes the full detection type string and V8
+internal stack trace:
 
 **stderr:**
 
@@ -187,7 +187,7 @@ V8 internal stack trace:
 =====================
 ```
 
-**JSON Lines** (with `--pp-detect-output=result.jsonl`):
+**JSON Lines** (with `--pp-output=result.jsonl`):
 
 ```jsonl
 {"type":"Read of non-built-in property from Object.prototype!","property":"polluted","stack":"\n==== JS stack trace ...\n"}
@@ -214,22 +214,22 @@ V8 internal stack trace:
 ./node your_app.js
 
 # Verbose: include stack traces and full type descriptions
-./node --pp-detect-verbose your_app.js
+./node --pp-verbose your_app.js
 
 # File output: write detection results as JSON Lines to a file
-./node --pp-detect-output=result.jsonl your_app.js
+./node --pp-output=result.jsonl your_app.js
 
 # Both: verbose JSON Lines file output
-./node --pp-detect-verbose --pp-detect-output=result.jsonl your_app.js
+./node --pp-verbose --pp-output=result.jsonl your_app.js
 ```
 
 No special V8 flags required for detection itself — it is always on.
 
-| Flag                   | Description                                                         |
-| ---------------------- | ------------------------------------------------------------------- |
-| (none)                 | Concise one-liner output to stderr (default)                        |
-| `--pp-detect-verbose`  | Full type descriptions + V8 stack traces                            |
-| `--pp-detect-output=F` | Write to file `F` as JSON Lines (concise or verbose per above flag) |
+| Flag            | Description                                                         |
+| --------------- | ------------------------------------------------------------------- |
+| (none)          | Concise one-liner output to stderr (default)                        |
+| `--pp-verbose`  | Full type descriptions + V8 stack traces                            |
+| `--pp-output=F` | Write to file `F` as JSON Lines (concise or verbose per above flag) |
 
 ## Test
 
@@ -259,12 +259,12 @@ obj.x;
 
 | File                                    | What                                                                                                                                                                                                | Why                                                                                                                                                                                                                          |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deps/v8/src/flags/flag-definitions.h`  | Added `DEFINE_STRING(pp_detect_output, ...)` and `DEFINE_BOOL(pp_detect_verbose, ...)` V8 flags.                                                                                                    | `pp_detect_output`: controls output destination. `pp_detect_verbose`: controls output detail level (default concise, verbose adds stack traces).                                                                             |
+| `deps/v8/src/flags/flag-definitions.h`  | Added `DEFINE_STRING(pp_output, ...)` and `DEFINE_BOOL(pp_verbose, ...)` V8 flags.                                                                                                                  | `pp_output`: controls output destination. `pp_verbose`: controls output detail level (default concise, verbose adds stack traces).                                                                                           |
 | `deps/v8/src/ic/accessor-assembler.cc`  | **IP1**: Added Object.prototype check in `GenericPropertyLoad()`'s `return_value` path. Calls `Runtime_ReportPPGadgetCandidateProto`.                                                               | Catches non-built-in property reads from Object.prototype via the megamorphic CSA path.                                                                                                                                      |
 | `deps/v8/src/ic/accessor-assembler.cc`  | **IP2**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `HandleLoadICSmiHandlerLoadNamedCase()`'s `nonexistent` label.                                                             | Catches repeated non-existent property accesses via the IC cached `kNonExistent` handler. Receiver passed for Object.prototype chain filtering.                                                                              |
 | `deps/v8/src/ic/accessor-assembler.cc`  | **IP3**: Added `Runtime_ReportPPGadgetCandidate(name, receiver)` call in `GenericPropertyLoad()`'s `return_undefined` label.                                                                        | Catches first-time non-existent property accesses via the megamorphic CSA slow path. Receiver passed for Object.prototype chain filtering.                                                                                   |
 | `deps/v8/src/ic/ic.cc`                  | **IP4**: `ReportPPGadget()` helper (anonymous namespace) + call in `LoadIC::Load()` when `!it.IsFound()`. Walks receiver's prototype chain via `PrototypeIterator` to check for `Object.prototype`. | Catches first-time non-existent property accesses via C++ IC miss path. Filters out `Object.create(null)` objects that are immune to PP. Helper is a **deliberate copy** of the one in `runtime-object.cc` (see note below). |
-| `deps/v8/src/runtime/runtime-object.cc` | `ReportPPGadget()` helper (anonymous namespace) + `Runtime_ReportPPGadgetCandidateProto(name)` + `Runtime_ReportPPGadgetCandidate(name, receiver)`. Both runtime functions now call the helper.     | Centralized output logic for IP1-3. Supports JSON Lines file output (when `--pp-detect-output` is set) or stderr plain text (default).                                                                                       |
+| `deps/v8/src/runtime/runtime-object.cc` | `ReportPPGadget()` helper (anonymous namespace) + `Runtime_ReportPPGadgetCandidateProto(name)` + `Runtime_ReportPPGadgetCandidate(name, receiver)`. Both runtime functions now call the helper.     | Centralized output logic for IP1-3. Supports JSON Lines file output (when `--pp-output` is set) or stderr plain text (default).                                                                                              |
 | `deps/v8/src/runtime/runtime.h`         | Registered both runtime functions in `FOR_EACH_INTRINSIC_INTERNAL`. `ReportPPGadgetCandidate` takes 2 args (name, receiver).                                                                        | Required for CSA `CallRuntime()` to reference them.                                                                                                                                                                          |
 
 > **Helper duplication note**: The `ReportPPGadget()` helper function exists in
@@ -303,8 +303,7 @@ obj.x;
 
 - [ ] Add a V8 flag (e.g. `--pp-detect`) to toggle gadget detection on/off
 - [x] Add an option to write detection output to a file instead of stderr
-      (`--pp-detect-output=<file>`, JSON Lines format)
-- [x] Add `--pp-detect-verbose` flag for detailed output (stack traces + full
-      type descriptions); default is concise one-liner output
-- [ ] Rename `--pp-detect-*` flags to `--pp-*` (e.g. `--pp-output`,
-      `--pp-verbose`)
+      (`--pp-output=<file>`, JSON Lines format)
+- [x] Add `--pp-verbose` flag for detailed output (stack traces + full type
+      descriptions); default is concise one-liner output
+- [x] Rename `--pp-detect-*` flags to `--pp-*` (`--pp-output`, `--pp-verbose`)
